@@ -5,16 +5,16 @@ using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
 using Azure.DigitalTwins.Core;
 using Azure;
-using Azure.Messaging.EventGrid;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Microsoft.Azure.Devices;
 
 namespace Company.Function
 {
     public class EventHubTrigger1
     {
         private readonly ILogger<EventHubTrigger1> _logger;
+
+        // Get environment Variable for Azure Digital Twin?
         private static readonly string? adtServiceUrl = Environment.GetEnvironmentVariable("ADT_SERVICE_URL");
         private static readonly DigitalTwinsClient client = new DigitalTwinsClient(
             new Uri(adtServiceUrl), new DefaultAzureCredential()
@@ -26,6 +26,8 @@ namespace Company.Function
         }
 
         [Function(nameof(EventHubTrigger1))]
+        
+        // Run an array of events from the batch
         public async Task Run([EventHubTrigger("festoiothub", Connection = "AzureFunction_RootManageSharedAccessKey_EVENTHUB")] EventData[] events)
         {
             foreach (EventData eventData in events)
@@ -35,117 +37,76 @@ namespace Company.Function
 
                 try
                 {
-                    //假设 messageBody 是一个 JSON 字符串，包含 status 和 temperature 属性
-                    var data = JsonSerializer.Deserialize<TemperatureSensorData>(messageBody);
+                    // Suppose messageBody is JSON character string，include G1BG1 and G1BG2 property. TESTING BY LIHAO SO ONLY 2
+                    var data = JsonSerializer.Deserialize<PLCData>(messageBody);
+                    
+                    if (data == null)
+                    {
+                        _logger.LogError("Deserialized data is null");
+                        continue;
+                    }
+                    
+                    _logger.LogInformation("Deserialized data: G1BG1={G1BG1}, G1BG2={G1BG2}", data.G1BG1, data.G1BG2);
 
-                    string digitalTwinId = "TestTwin1";
+                    string digitalTwinId = "PLCout";
 
                     var updatePatch = new JsonPatchDocument();
-                    updatePatch.AppendReplace("/status", data.Status);
-                    updatePatch.AppendReplace("/temperature", data.Temperature);
+                    updatePatch.AppendReplace("/G1BG1", data.G1BG1);
+                    updatePatch.AppendReplace("/G1BG2", data.G1BG2);
+                    updatePatch.AppendReplace("/G1BG3", data.G1BG3);
+                    updatePatch.AppendReplace("/C2BG1", data.C2BG1);
+                    updatePatch.AppendReplace("/C2BG2", data.C2BG2);
+                    updatePatch.AppendReplace("/C2BG3", data.C2BG3);
+                    updatePatch.AppendReplace("/SF1", data.SF1);
+                    updatePatch.AppendReplace("/SF2", data.SF2);
+                    updatePatch.AppendReplace("/SF3", data.SF3);
+                    updatePatch.AppendReplace("/SF4", data.SF4);
 
+                    _logger.LogInformation($"Updating Digital Twin: {digitalTwinId} with G1BG1: {data.G1BG1} and G1BG2: {data.G1BG2}");
+                    
                     await client.UpdateDigitalTwinAsync(digitalTwinId, updatePatch);
-                    _logger.LogInformation($"Updated Digital Twin: {digitalTwinId} with status: {data.Status} and temperature: {data.Temperature}");
+                    _logger.LogInformation($"Successfully updated Digital Twin: {digitalTwinId}");
                 }
                 catch (JsonException je)
                 {
                     _logger.LogError($"JSON deserialization error: {je.Message}");
-                    // 处理反序列化错误
+                    // handle erroneous sequencing error
+                }
+                catch (RequestFailedException rfe)
+                {
+                    _logger.LogError($"Request to ADT failed: {rfe.Message}");
+                    // handle case of ADT request failure
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError($"Error updating digital twin: {ex.Message}");
-                    // 处理其他异常
+                    // handle all other exceptions
                 }
             }
         }
 
-        private class TemperatureSensorData
+        private class PLCData
         {
-            [JsonPropertyName("status")]
-            public string? Status {get; set; }
-            [JsonPropertyName("temperature")]
-            public double Temperature {get; set; }
-        }
-    }
-
-    public class DigitalTwinsToIoTHubFunction
-    {
-        private readonly ILogger<DigitalTwinsToIoTHubFunction> log;
-        private static readonly ServiceClient serviceClient = ServiceClient.CreateFromConnectionString(Environment.GetEnvironmentVariable("IOTHUB_CONNECTION_STRING"));
-
-        public DigitalTwinsToIoTHubFunction(ILogger<DigitalTwinsToIoTHubFunction> logger)
-        {
-            log = logger;
-        }
-
-        [Function("DigitalTwinsToIoTHubFunction")]
-        public async Task Run([EventGridTrigger] EventGridEvent eventGridEvent)
-        {
-            log.LogInformation("EventGrid trigger function processed a request.");
-
-            string jsonData = eventGridEvent.Data.ToString();
-            log.LogInformation($"Raw event data: {jsonData}");
-
-            // Try to deserialize the event data into the expected DataWithPatch structure
-            var eventDataWrapper = JsonSerializer.Deserialize<EventDataWrapper>(jsonData);
-
-            if (eventDataWrapper?.Data?.Patch == null)
-            {
-                log.LogError("Patch data is null or missing.");
-                return;
-            }
-
-            // Extract the status and temperature values from the patch operations
-            string? status = eventDataWrapper.Data.Patch.FirstOrDefault(p => p.Path == "/status")?.Value.GetString();
-            double? temperature = eventDataWrapper.Data.Patch.FirstOrDefault(p => p.Path == "/temperature")?.Value.GetDouble();
-
-            if (string.IsNullOrEmpty(status) || !temperature.HasValue)
-            {
-                log.LogWarning("Status or temperature is missing or invalid in the patch.");
-                return;
-            }
-
-            // 构建一个新的消息对象来发送
-            var messageObject = new
-            {
-                status = status,
-                temperature = temperature.Value
-            };
-
-            // 构造你想发送的消息
-            var messageString = JsonSerializer.Serialize(messageObject);
-            var message = new Message(Encoding.UTF8.GetBytes(messageString));
-
-            //发送信息给IoT Hub
-            await serviceClient.SendAsync("FestoDevice", message);
-            log.LogInformation($"Message sent to IoT Hub for device FestoDevice: {messageString}");
-        }
-
-        // Class to represent a single operation in a patch
-        private class PatchOperation
-        {
-            [JsonPropertyName("op")]
-            public string? Op { get; set; }
-
-            [JsonPropertyName("path")]
-            public string? Path { get; set; }
-
-            [JsonPropertyName("value")]
-            public JsonElement Value { get; set; }
-        }
-
-        // Class to represent the overall patch structure received in the event data
-        private class DataWithPatch
-        {
-            [JsonPropertyName("patch")]
-            public List<PatchOperation>? Patch { get; set; }
-        }
-
-        private class EventDataWrapper
-        {
-            [JsonPropertyName("data")]
-            public DataWithPatch? Data {get; set; }
+            [JsonPropertyName("G1BG1")]
+            public bool G1BG1 {get; set; }
+            [JsonPropertyName("G1BG2")]
+            public bool G1BG2 {get; set; }
+            [JsonPropertyName("G1BG3")]
+            public bool G1BG3 {get; set; }
+            [JsonPropertyName("C2BG1")]
+            public bool C2BG1 {get; set; }
+            [JsonPropertyName("C2BG2")]
+            public bool C2BG2 {get; set; }
+            [JsonPropertyName("C2BG3")]
+            public bool C2BG3 {get; set; }
+            [JsonPropertyName("SF1")]
+            public bool SF1 {get; set; }
+            [JsonPropertyName("SF2")]
+            public bool SF2 {get; set; }
+            [JsonPropertyName("SF3")]
+            public bool SF3 {get; set; }
+            [JsonPropertyName("SF4")]
+            public bool SF4 {get; set; }
         }
     }
 }

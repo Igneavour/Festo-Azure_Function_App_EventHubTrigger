@@ -85,7 +85,7 @@ namespace Company.Function
             }
         }
 
-    // PLC data in Json format to test sending
+    // PLC data in Json format to test sendingg
         private class PLCData
         {
             [JsonPropertyName("G1BG1")]
